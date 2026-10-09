@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpinionMap</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header>
+    <h1>OpinionMap</h1>
+    <p>Enter a topic to see the majority voice, minority views and outliers in online discussions.</p>
+    <div id="userBar" hidden>Logged in as <strong id="userName"></strong>
+      <button id="logoutBtn" class="link">Log out</button></div>
+  </header>
+
+  <main>
+    <section id="authBox" class="card" hidden>
+      <h2 id="authTitle">Log in</h2>
+      <input type="text" id="authUser" placeholder="Username" maxlength="30" autocomplete="username">
+      <input type="password" id="authPass" placeholder="Password (8+ characters)" maxlength="72" autocomplete="current-password">
+      <button id="authBtn">Log in</button>
+      <p id="authMsg"></p>
+      <p><a href="#" id="authSwitch">New here? Create an account</a></p>
+    </section>
+
+    <section id="appBox" hidden>
+      <div class="search">
+        <input type="text" id="topic" placeholder="e.g. Artificial Intelligence in Education" maxlength="200">
+        <button id="analyzeBtn">Analyze</button>
+      </div>
+      <p id="status"></p>
+
+      <section id="results" hidden>
+        <p id="demoNote" class="note" hidden></p>
+        <h2 id="resTopic"></h2>
+        <p id="resMeta"></p>
+
+        <div class="cards">
+          <div class="card"><h3>Majority viewpoint</h3><div id="majority"></div></div>
+          <div class="card"><h3>Stance distribution <small>(estimated from sentiment)</small></h3><div id="stance"></div></div>
+        </div>
+        <div class="card"><h3>Major themes</h3><ul id="themes"></ul></div>
+        <div class="card"><h3>Potential outliers</h3><ul id="outliers"></ul></div>
+        <div class="card"><h3>Sample collected posts</h3><ul id="samples"></ul></div>
+        <div class="card"><h3>Basic statistics</h3><ul id="stats"></ul></div>
+      </section>
+
+      <div class="card"><h3>Your past searches</h3><ul id="history" class="history"></ul></div>
+    </section>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

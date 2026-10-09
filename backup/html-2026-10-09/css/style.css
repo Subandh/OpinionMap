@@ -1,0 +1,35 @@
+* { box-sizing: border-box; }
+body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+header { background: #1f3a5f; color: #fff; padding: 24px 16px; text-align: center; }
+header h1 { margin: 0 0 6px; }
+header p { margin: 0; opacity: 0.85; }
+main { max-width: 800px; margin: 24px auto; padding: 0 16px; }
+.search { display: flex; gap: 8px; }
+.search input { flex: 1; padding: 12px; font-size: 16px; border: 1px solid #bbb; border-radius: 6px; }
+.search button { padding: 12px 22px; font-size: 16px; background: #2e7d32; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+.search button:disabled { background: #999; cursor: wait; }
+#status { min-height: 24px; color: #555; }
+.note { background: #fff3cd; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.card { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.card h3 { margin-top: 0; }
+.big { font-size: 34px; font-weight: bold; color: #1f3a5f; }
+.bar-row { margin-bottom: 10px; }
+.bar-label { text-transform: capitalize; font-size: 14px; }
+.bar { background: #e3e7eb; border-radius: 4px; height: 14px; }
+.fill { background: #2e7d32; height: 14px; border-radius: 4px; }
+@media (max-width: 600px) { .cards { grid-template-columns: 1fr; } }
+
+[hidden] { display: none !important; }
+#authBox { max-width: 380px; margin: 0 auto 16px; display: flex; flex-direction: column; gap: 10px; }
+#authBox h2 { margin: 0; }
+#authBox input { padding: 12px; font-size: 16px; border: 1px solid #bbb; border-radius: 6px; }
+#authBox button { padding: 12px; font-size: 16px; background: #1f3a5f; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+#authBox button:disabled { background: #999; }
+#authMsg { color: #b00020; min-height: 20px; margin: 0; }
+#userBar { margin-top: 10px; font-size: 14px; }
+button.link { background: none; border: 0; color: #cfe3ff; text-decoration: underline; cursor: pointer; font-size: 14px; }
+.history { list-style: none; padding: 0; margin: 0; }
+.history li { padding: 8px 4px; border-bottom: 1px solid #eee; cursor: pointer; }
+.history li:hover { background: #f4f6f8; }
+.history .meta { color: #777; font-size: 13px; }
