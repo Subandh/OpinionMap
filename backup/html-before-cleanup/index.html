@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpinionMap - see the whole conversation, not just the loudest voice</title>
+  <meta name="description" content="OpinionMap analyzes Reddit and X discussions on any topic and shows the majority view, minority views and outlier opinions in one dashboard.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#4f46e5">
+  <meta property="og:title" content="OpinionMap - see the whole conversation">
+  <meta property="og:description" content="Majority, minority and outlier opinions from Reddit and X, in one dashboard.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css?v=3">
+  <link rel="stylesheet" href="css/home.css?v=1">
+  <script src="js/theme.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <svg class="sprite" aria-hidden="true" focusable="false"><defs>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 14 6-6 6 6"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15v3M12 9v9M17 12v6"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+    <symbol id="i-cap" viewBox="0 0 24 24"><path d="m2 9 10-5 10 5-10 5z"/><path d="M6 11v5c0 1.5 3 3 6 3s6-1.5 6-3v-5"/></symbol>
+    <symbol id="i-news" viewBox="0 0 24 24"><path d="M4 5h13v14H6a2 2 0 0 1-2-2z"/><path d="M17 9h3v8a2 2 0 0 1-2 2"/><path d="M8 9h5M8 13h5"/></symbol>
+    <symbol id="i-team" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14a5 5 0 0 1 4.5 5"/></symbol>
+    <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+  </defs></svg>
+
+  <header class="topbar">
+    <div class="wrap bar">
+      <a class="brand" href="./" aria-label="OpinionMap home">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+          <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+          <rect width="32" height="32" rx="9" fill="url(#lg)"/>
+          <rect x="7" y="14" width="4" height="11" rx="2" fill="#fff"/>
+          <rect x="14" y="7" width="4" height="18" rx="2" fill="#fff"/>
+          <rect x="21" y="17" width="4" height="8" rx="2" fill="#fff" opacity=".7"/>
+        </svg>
+        <span>OpinionMap</span>
+      </a>
+      <nav class="nav" id="nav" aria-label="Main">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#concepts">Minority vs outlier</a>
+        <a href="#method">Method</a>
+        <a href="#faq">FAQ</a>
+        <a class="only-mobile js-guest" href="app.html">Log in</a>
+      </nav>
+      <div class="bar-actions">
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="Toggle dark mode">
+          <svg class="ico ico-moon" aria-hidden="true"><use href="#i-moon"/></svg>
+          <svg class="ico ico-sun" aria-hidden="true"><use href="#i-sun"/></svg>
+        </button>
+        <span class="nav-cta js-guest">
+          <a class="btn btn-ghost" href="app.html">Log in</a>
+          <a class="btn btn-primary" href="app.html#signup">Sign up</a>
+        </span>
+        <a class="btn btn-primary js-user" href="app.html" hidden>Open dashboard</a>
+        <button class="icon-btn menu-btn" id="menuBtn" type="button" aria-expanded="false" aria-controls="nav" aria-label="Open menu">
+          <svg class="ico" aria-hidden="true"><use href="#i-menu"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <section class="home-hero">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">Opinion analysis for Reddit and X</p>
+          <h1>See the whole conversation, <span class="grad">not just the loudest voice.</span></h1>
+          <p class="lead">Type any topic. OpinionMap gathers public discussions from Reddit and X, keeps only the posts that are really about it, and shows you where most people stand, who disagrees, and who is saying something nobody else is.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary btn-lg" href="app.html#signup" data-cta><span class="cta-text">Get started free</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+            <a class="btn btn-ghost btn-lg" href="#how">See how it works</a>
+          </div>
+          <ul class="trust">
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Free to use</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Public posts only</li>
+            <li><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg>Raw data deleted when you log out</li>
+          </ul>
+        </div>
+
+        <div class="hero-visual">
+          <span class="float f1"><span class="badge src-reddit">Reddit</span>discussions</span>
+          <span class="float f2"><span class="badge src-x">X</span>posts</span>
+          <div class="mock" role="img" aria-label="Illustrative example of an OpinionMap dashboard for the topic AI in education">
+            <div class="mock-top">
+              <span class="mock-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="mock-title">AI in education</span>
+              <span class="pill">Example</span>
+            </div>
+            <div class="mock-kpis">
+              <div><b>1,000</b><span>posts</span></div>
+              <div><b class="t-pos">61%</b><span>majority</span></div>
+              <div><b>5</b><span>themes</span></div>
+            </div>
+            <div class="mock-mid">
+              <div class="mock-donut"><b>61%</b><span>Supportive</span></div>
+              <ul class="mock-legend">
+                <li><i class="dot pos"></i>Supportive<b>61%</b></li>
+                <li><i class="dot neg"></i>Opposed<b>27%</b></li>
+                <li><i class="dot"></i>Neutral<b>12%</b></li>
+              </ul>
+            </div>
+            <div class="mock-bars">
+              <div><span>Personalized learning</span><div class="track"><div class="fill" style="width:78%"></div></div></div>
+              <div><span>Academic integrity</span><div class="track"><div class="fill" style="width:64%"></div></div></div>
+              <div><span>Privacy <em class="pill">Minority</em></span><div class="track"><div class="fill" style="width:22%"></div></div></div>
+            </div>
+            <div class="mock-out">
+              <span class="badge badge-warn">Outlier</span>
+              <p>"A school that banned screens entirely and reports better focus." Unlike anything else in the discussion.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap stats reveal" aria-label="At a glance">
+      <div><strong>2</strong><span>platforms: Reddit and X</span></div>
+      <div><strong>1,000</strong><span>posts collected per search, at most</span></div>
+      <div><strong>3</strong><span>lenses: majority, minority, outlier</span></div>
+      <div><strong>Minutes</strong><span>not hours of reading threads</span></div>
+    </section>
+
+    <section class="section" id="how">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <p class="eyebrow">How it works</p>
+          <h2>From a topic to a clear picture in four steps</h2>
+          <p>You type a topic. We do the reading.</p>
+        </div>
+        <div class="how-grid">
+          <div class="card how reveal"><div class="n">1</div><h3>Pick a topic</h3><p>Enter anything people argue about, from "AI in education" to "electric cars".</p></div>
+          <div class="card how reveal d1"><div class="n">2</div><h3>We collect the discussion</h3><p>Public posts and comments are gathered from Reddit and X, up to 1,000 in total.</p></div>
+          <div class="card how reveal d2"><div class="n">3</div><h3>We clean and analyze</h3><p>Off-topic posts are filtered out. The rest are scored for tone, grouped into themes and checked for oddities.</p></div>
+          <div class="card how reveal d3"><div class="n">4</div><h3>You explore the results</h3><p>See the split, read real examples, open the originals and download the data.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" id="features">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <p class="eyebrow">Features</p>
+          <h2>Everything you need to read a debate at a glance</h2>
+          <p>Built to answer one question: what do people actually think, and how divided are they?</p>
+        </div>
+        <div class="feat-grid">
+          <article class="card feat reveal"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg></div><h3>Majority and minority views</h3><p>See how opinion divides, with percentages for supportive, opposed and neutral posts.</p></article>
+          <article class="card feat reveal d1"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg></div><h3>Theme discovery</h3><p>Posts are grouped by what they talk about, so recurring ideas rise to the top and small groups are marked as minority themes.</p></article>
+          <article class="card feat reveal d2"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-target"/></svg></div><h3>Outlier detection</h3><p>Spot posts that are statistically unlike everything else in the discussion.</p></article>
+          <article class="card feat reveal"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-filter"/></svg></div><h3>On-topic filtering</h3><p>Replies that drift off the subject are removed before analysis, so the numbers describe your topic and not the chatter around it.</p></article>
+          <article class="card feat reveal d1"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-link"/></svg></div><h3>Evidence you can check</h3><p>Every dashboard shows real example posts with a link to the original, so you can judge the findings yourself.</p></article>
+          <article class="card feat reveal d2"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-clock"/></svg></div><h3>Your searches, saved</h3><p>Each search and its results stay in your account. Come back later or download the data as a JSON file.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="concepts">
+      <div class="wrap vs-grid">
+        <div class="vs-copy reveal">
+          <p class="eyebrow">Minority vs outlier</p>
+          <h2>Unpopular is not the same as unusual</h2>
+          <p>A minority opinion is a view that fewer people hold. An outlier is a post that does not resemble the rest of the conversation at all. A view can be unpopular without being unusual, and the other way around. OpinionMap reports both, separately.</p>
+          <div class="card vs-card"><h3><i class="dot min"></i>Minority opinion</h3><p>Example: about one in four posts is skeptical of AI tutors. Many people say similar things, there just are fewer of them.</p></div>
+          <div class="card vs-card"><h3><i class="dot out"></i>Outlier</h3><p>Example: one post about a school that banned screens entirely. Nobody else is saying anything like it.</p></div>
+        </div>
+        <div class="reveal d1">
+          <svg viewBox="0 0 360 250" role="img" aria-label="Illustration: a large cluster of majority opinions, a smaller cluster of minority opinions, and three isolated outliers" style="width:100%;height:auto">
+            <rect class="plot-bg" width="360" height="250" rx="16"/>
+            <g class="maj">
+              <circle cx="95" cy="135" r="6"/><circle cx="110" cy="128" r="6"/><circle cx="125" cy="140" r="6"/><circle cx="100" cy="150" r="6"/>
+              <circle cx="118" cy="155" r="6"/><circle cx="135" cy="152" r="6"/><circle cx="90" cy="162" r="6"/><circle cx="108" cy="168" r="6"/>
+              <circle cx="126" cy="170" r="6"/><circle cx="142" cy="165" r="6"/><circle cx="82" cy="145" r="6"/><circle cx="115" cy="142" r="6"/>
+              <circle cx="100" cy="176" r="6"/><circle cx="130" cy="128" r="6"/>
+            </g>
+            <g class="min">
+              <circle cx="245" cy="88" r="6"/><circle cx="260" cy="95" r="6"/><circle cx="270" cy="108" r="6"/><circle cx="250" cy="110" r="6"/>
+              <circle cx="262" cy="82" r="6"/><circle cx="240" cy="102" r="6"/><circle cx="275" cy="92" r="6"/><circle cx="255" cy="120" r="6"/>
+            </g>
+            <g class="out">
+              <g><circle cx="332" cy="212" r="6"/><circle class="ring" cx="332" cy="212" r="13"/></g>
+              <g><circle cx="36" cy="38" r="6"/><circle class="ring" cx="36" cy="38" r="13"/></g>
+              <g><circle cx="205" cy="24" r="6"/><circle class="ring" cx="205" cy="24" r="13"/></g>
+            </g>
+          </svg>
+          <div class="plot-legend">
+            <span><i class="dot maj"></i>Majority view</span>
+            <span><i class="dot min"></i>Minority view</span>
+            <span><i class="dot out"></i>Outliers</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <p class="eyebrow">Who it's for</p>
+          <h2>Useful whenever a conversation is too big to read</h2>
+        </div>
+        <div class="who-grid">
+          <div class="card who reveal"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-cap"/></svg></div><h3>Students and researchers</h3><p>Get a structured first look at a public debate before you dig into the sources.</p></div>
+          <div class="card who reveal d1"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-news"/></svg></div><h3>Journalists and writers</h3><p>Take the temperature of an online conversation, then quote real posts with links.</p></div>
+          <div class="card who reveal d2"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-team"/></svg></div><h3>Teams and organizations</h3><p>See which concerns come up most, and which are rare but worth watching.</p></div>
+          <div class="card who reveal d3"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-bulb"/></svg></div><h3>Curious people</h3><p>Find out whether the loudest take is really the common one.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="method">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <p class="eyebrow">Method</p>
+          <h2>How it works under the hood, and where it falls short</h2>
+          <p>OpinionMap gives estimates, not verdicts. Here is exactly what it does and what to keep in mind.</p>
+        </div>
+        <div class="method-grid">
+          <div class="card reveal">
+            <h3>The analysis pipeline</h3>
+            <ol class="method-list">
+              <li><b>Collect.</b> Public posts and comments are gathered from Reddit and X with scraping services.</li>
+              <li><b>Clean.</b> Links, duplicates and near-empty posts are removed.</li>
+              <li><b>Filter.</b> Only posts that mention or closely resemble the topic are kept.</li>
+              <li><b>Measure.</b> The tone of each post is scored and mapped to supportive, opposed or neutral.</li>
+              <li><b>Group.</b> Text is turned into word-importance vectors and clustered into themes.</li>
+              <li><b>Flag.</b> A local outlier method highlights the posts least like their neighbors.</li>
+            </ol>
+          </div>
+          <div class="card reveal d1">
+            <h3>Know the limits</h3>
+            <ul class="limits">
+              <li><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Stance is estimated from tone, not from what someone believes. Sarcasm can fool it.</span></li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Reddit and X are not a mirror of everyone's opinions.</span></li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Results are automated. Read the example posts before drawing conclusions.</span></li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg><span>Collection relies on third-party scrapers, so a source can occasionally return less data than asked for.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" id="privacy">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <p class="eyebrow">Your data</p>
+          <h2>Built to keep little, and keep it short</h2>
+        </div>
+        <div class="priv-grid">
+          <div class="card priv reveal"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg></div><h3>Passwords are hashed</h3><p>We store a one-way hash, never your password itself. Five wrong attempts lock the account for 10 minutes.</p></div>
+          <div class="card priv reveal d1"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg></div><h3>Raw data is temporary</h3><p>Raw collected data is deleted when you log out, when you start a new search, or after 2 hours. Cleaned post text is kept for up to 7 days.</p></div>
+          <div class="card priv reveal d2"><div class="ibox"><svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg></div><h3>Public posts only</h3><p>Only publicly visible posts are analyzed. Your account keeps your searches and their results, nothing else.</p></div>
+        </div>
+        <p class="fine-note">This demo does not use HTTPS yet, so please choose a password you do not use anywhere else.</p>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <p class="eyebrow">FAQ</p>
+          <h2>Questions people ask</h2>
+        </div>
+        <div class="faq reveal">
+          <details><summary>Is OpinionMap free?<svg class="ico" aria-hidden="true"><use href="#i-chev"/></svg></summary><p>Yes. It is a university project, so there is nothing to pay for.</p></details>
+          <details><summary>Where does the data come from?<svg class="ico" aria-hidden="true"><use href="#i-chev"/></svg></summary><p>Public posts and comments on Reddit and X, collected with third-party scraping services. Private messages and private accounts are never read.</p></details>
+          <details><summary>How accurate is the stance?<svg class="ico" aria-hidden="true"><use href="#i-chev"/></svg></summary><p>It is a rough estimate. The system reads the tone of each post, so "this is a terrible idea" counts as opposed and "this is amazing" as supportive. Sarcasm, mixed feelings and polite disagreement can be misjudged, so use the example posts to check the picture.</p></details>
+          <details><summary>Can I analyze any topic?<svg class="ico" aria-hidden="true"><use href="#i-chev"/></svg></summary><p>Most topics people discuss in English work well. Very new, very niche or very short topics may return too few posts. If nothing on-topic is found, you will be asked to try a broader topic.</p></details>
+          <details><summary>How long does an analysis take?<svg class="ico" aria-hidden="true"><use href="#i-chev"/></svg></summary><p>Usually a few minutes, and collection from Reddit and X takes the longest. You can leave the page. The job keeps running and the result appears under Your searches.</p></details>
+          <details><summary>What do I get at the end?<svg class="ico" aria-hidden="true"><use href="#i-chev"/></svg></summary><p>A dashboard with the stance split, themes, outliers, statistics and example posts with links to the originals. You can download everything as a JSON file.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap">
+      <div class="cta-band reveal">
+        <h2>Ready to hear the whole conversation?</h2>
+        <p>Create a free account and run your first analysis in minutes.</p>
+        <div class="cta-row">
+          <a class="btn btn-white btn-lg" href="app.html#signup" data-cta><span class="cta-text">Create your account</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="btn btn-outline-w btn-lg js-guest" href="app.html">Log in</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap">
+      <div class="foot-grid">
+        <div class="foot-brand">
+          <a class="brand" href="./"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#6366f1"/><rect x="7" y="14" width="4" height="11" rx="2" fill="#fff"/><rect x="14" y="7" width="4" height="18" rx="2" fill="#fff"/><rect x="21" y="17" width="4" height="8" rx="2" fill="#fff" opacity=".7"/></svg><span>OpinionMap</span></a>
+          <p>See where opinion really stands on any topic.</p>
+        </div>
+        <div><h4>Explore</h4><ul><li><a href="#how">How it works</a></li><li><a href="#features">Features</a></li><li><a href="#method">Method</a></li><li><a href="#faq">FAQ</a></li></ul></div>
+        <div><h4>Account</h4><ul><li><a href="app.html">Log in</a></li><li><a href="app.html#signup">Sign up</a></li></ul></div>
+        <div><h4>About</h4><ul><li><a href="#privacy">Your data</a></li><li><a href="#concepts">Minority vs outlier</a></li></ul></div>
+      </div>
+      <p>OpinionMap is a university project. Results are automated estimates and can be wrong. Stance is judged from tone, not from what someone actually believes.</p>
+      <p>&copy; <span id="year"></span> OpinionMap</p>
+    </div>
+  </footer>
+
+  <button class="to-top" id="toTop" type="button" aria-label="Back to top" hidden><svg class="ico" aria-hidden="true"><use href="#i-up"/></svg></button>
+
+  <script src="js/home.js"></script>
+</body>
+</html>

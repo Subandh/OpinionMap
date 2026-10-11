@@ -1,0 +1,27 @@
+
+# Temporary Codex files
+.codex/.tmp/
+
+# VS Code editor settings
+.vscode/
+
+# Temporary Codex files
+.codex/.tmp/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+.vscode-server/
