@@ -1,853 +1,3 @@
-      .catch(function () {});
-  }
-
-  doc.getElementById('year').textContent = new Date().getFullYear();
-})();
-EOF
-
-curl -s http://localhost/api/session.php
-echo
-curl -s -o /dev/null -w "home: %{http_code}\n" http://localhost/
-curl -s -o /dev/null -w "app:  %{http_code}\n" http://localhost/app.html
-curl -s -o /dev/null -w "css:  %{http_code}\n" http://localhost/css/home.css
-curl -s -o /dev/null -w "js:   %{http_code}\n" http://localhost/js/home.js
-cp -r /var/www/html ~/backup/html-before-cleanup
-grep -rniE "university|class project|college project|https yet|not on https|not hosted|not currently hosted|throwaway|prototype|placeholder analysis|coursework|work in progress|demo" /var/www/html --include=*.html --include=*.js --include=*.css --include=*.txt --exclude=jquery.min.js | cut -c1-220 
-python3 - <<'PY'
-import re
-from pathlib import Path
-
-ROOT = Path("/var/www/html")
-
-def edit(rel, pattern, repl, regex=False, label=""):
-    p = ROOT / rel
-    if not p.exists():
-        print("MISSING FILE ", rel)
-        return
-    text = p.read_text(encoding="utf-8")
-    if regex:
-        new, n = re.subn(pattern, repl, text, flags=re.S)
-    else:
-        n = text.count(pattern)
-        new = text.replace(pattern, repl)
-    if n:
-        p.write_text(new, encoding="utf-8")
-        print("done         ", rel, "-", label)
-    else:
-        print("not found    ", rel, "-", label)
-
-# ---- Home page (index.html) ----
-edit("index.html", r'[ \t]*<p class="fine-note">.*?</p>\n?', "", True,
-     "HTTPS password note removed")
-edit("index.html",
-     "<p>Yes. It is a university project, so there is nothing to pay for.</p>",
-     "<p>Yes. Creating an account and running analyses is free.</p>", False,
-     "FAQ answer about cost")
-edit("index.html",
-     "<p>OpinionMap is a university project. Results are automated estimates and can be wrong. Stance is judged from tone, not from what someone actually believes.</p>",
-     "<p>Results are automated estimates based on public posts.</p>", False,
-     "footer text")
-
-# ---- App page (app.html) ----
-edit("app.html", r'[ \t]*<p class="fine" id="httpNote".*?</p>\n?', "", True,
-     "HTTPS note on the login card removed")
-edit("app.html",
-     "<p>OpinionMap is a university project. Results are automated estimates and can be wrong. Stance is judged from tone, not from what someone actually believes. Collected raw data is deleted when you log out or after 2 hours.</p>",
-     "<p>Results are automated estimates based on public posts. Collected raw data is deleted when you log out or after 2 hours.</p>", False,
-     "footer text")
-
-# ---- App script (js/app.js) ----
-edit("js/app.js", r"[ \t]*\$\('#httpNote'\)[^\n]*\n", "", True,
-     "code that showed the HTTPS note")
-PY
-
-sudo mariadb opinionmap -e "SHOW TABLES;"
-sudo mariadb opinionmap -e "SHOW TABLE STATUS;"
-sudo mariadb-dump --no-data --skip-comments opinionmap > ~/opinionmap_schema.sql
-cat ~/opinionmap_schema.sql
-grep -rniE "university|class project|college project|https yet|not on https|not hosted|not currently hosted|throwaway|prototype|coursework|work in progress|httpNote" /var/www/html --include=*.html --include=*.js --include=*.css --include=*.txt --exclude=jquery.min.js | cut -c1-220
-sudo mariadb opinionmap <<'EOF'
-ALTER TABLE users ADD COLUMN IF NOT EXISTS role ENUM('user','admin') NOT NULL DEFAULT 'user';
-
-CREATE TABLE IF NOT EXISTS settings (
-  name VARCHAR(40) NOT NULL PRIMARY KEY,
-  value VARCHAR(255) NOT NULL,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  updated_by INT UNSIGNED NULL
-) ENGINE=InnoDB;
-
-INSERT IGNORE INTO settings (name, value) VALUES
-  ('use_reddit', '1'), ('use_x', '1'), ('max_items_reddit', '500'), ('max_items_x', '500');
-EOF
-
-sudo mariadb opinionmap -e "DESCRIBE users; SELECT name, value FROM settings;"
-cat >> /var/www/private/Auth.php <<'EOF'
-
-function user_role(int $userId): string
-{
-    $q = db()->prepare('SELECT role FROM users WHERE id = ?');
-    $q->execute([$userId]);
-    return (string) ($q->fetchColumn() ?: 'user');
-}
-
-function is_admin(int $userId): bool
-{
-    return $userId > 0 && user_role($userId) === 'admin';
-}
-
-// Stops the request unless the logged-in user is an admin. Returns the admin's user id.
-function require_admin(): int
-{
-    $id = current_user_id();
-    if (!is_admin($id)) {
-        json_out(403, ['error' => 'Forbidden']);
-    }
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'XMLHttpRequest') {
-        json_out(400, ['error' => 'Bad request']);
-    }
-    return $id;
-}
-EOF
-
-php -l /var/www/private/Auth.php
-cat > /var/www/private/Settings.php <<'EOF'
-<?php
-require_once __DIR__ . '/Database.php';
-
-const SETTING_DEFAULTS = [
-    'use_reddit'       => '1',
-    'use_x'            => '1',
-    'max_items_reddit' => '500',
-    'max_items_x'      => '500',
-];
-
-// Admin-controlled settings (falls back to the defaults above)
-function load_settings(): array
-{
-    $out = SETTING_DEFAULTS;
-    foreach (db()->query('SELECT name, value FROM settings')->fetchAll() as $r) {
-        if (array_key_exists($r['name'], $out)) {
-            $out[$r['name']] = (string) $r['value'];
-        }
-    }
-    return $out;
-}
-EOF
-
-php -l /var/www/private/Settings.php
-cat > /var/www/private/make_admin.php <<'EOF'
-<?php
-// Usage: ADMIN_PW='password (8-72 chars)' php make_admin.php USERNAME
-require __DIR__ . '/Database.php';
-
-$username = $argv[1] ?? '';
-$password = (string) getenv('ADMIN_PW');
-if (!preg_match('/^[A-Za-z0-9_]{3,30}$/', $username) || strlen($password) < 8 || strlen($password) > 72) {
-    fwrite(STDERR, "Usage: ADMIN_PW='password (8-72 chars)' php make_admin.php USERNAME\n");
-    exit(1);
-}
-$st = db()->prepare(
-    "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')
-     ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = 'admin',
-                             failed_logins = 0, locked_until = NULL"
-);
-$st->execute([$username, password_hash($password, PASSWORD_DEFAULT)]);
-echo "Admin account ready: {$username}\n";
-EOF
-
-read -rsp "Admin password: " ADMINPW; echo
-ADMIN_PW="$ADMINPW" php /var/www/private/make_admin.php Admin101
-unset ADMINPW
-sudo mariadb opinionmap -e "SELECT id, username, role, LEFT(password_hash, 7) AS hash_start FROM users;"
-mkdir -p /var/www/html/api/admin
-cat > /var/www/html/api/admin/stats.php <<'EOF'
-<?php
-require '/var/www/private/Auth.php';
-require_admin();
-
-try {
-    $pdo = db();
-    $n = fn(string $sql): int => (int) $pdo->query($sql)->fetchColumn();
-    json_out(200, [
-        'users'    => $n('SELECT COUNT(*) FROM users'),
-        'admins'   => $n("SELECT COUNT(*) FROM users WHERE role = 'admin'"),
-        'searches' => $n('SELECT COUNT(*) FROM jobs WHERE user_id IS NOT NULL'),
-        'today'    => $n('SELECT COUNT(*) FROM jobs WHERE user_id IS NOT NULL AND created_at > (NOW() - INTERVAL 1 DAY)'),
-        'running'  => $n("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','collecting','analyzing') AND created_at > (NOW() - INTERVAL 20 MINUTE)"),
-        'failed'   => $n("SELECT COUNT(*) FROM jobs WHERE status = 'failed' AND user_id IS NOT NULL"),
-        'items'    => $n('SELECT COALESCE(SUM(item_count), 0) FROM jobs WHERE user_id IS NOT NULL'),
-    ]);
-} catch (Throwable $e) {
-    error_log('admin/stats.php: ' . $e->getMessage());
-    json_out(500, ['error' => 'Database error']);
-}
-EOF
-
-cat > /var/www/html/api/admin/users.php <<'EOF'
-<?php
-require '/var/www/private/Auth.php';
-require_admin();
-
-try {
-    $q   = trim((string) ($_GET['q'] ?? ''));
-    $sql = "SELECT u.id, u.username, u.role, u.created_at, u.last_login_at, u.failed_logins,
-                   (u.locked_until IS NOT NULL AND u.locked_until > NOW()) AS locked,
-                   COUNT(j.id) AS searches, MAX(j.created_at) AS last_search
-            FROM users u LEFT JOIN jobs j ON j.user_id = u.id";
-    $args = [];
-    if ($q !== '') {
-        $sql   .= ' WHERE u.username LIKE ?';
-        $args[] = '%' . addcslashes($q, '%_\\') . '%';
-    }
-    $sql .= ' GROUP BY u.id ORDER BY u.id DESC LIMIT 500';
-    $st = db()->prepare($sql);
-    $st->execute($args);
-    json_out(200, ['users' => $st->fetchAll()]);
-} catch (Throwable $e) {
-    error_log('admin/users.php: ' . $e->getMessage());
-    json_out(500, ['error' => 'Database error']);
-}
-EOF
-
-cat > /var/www/html/api/admin/history.php <<'EOF'
-<?php
-require '/var/www/private/Auth.php';
-require_admin();
-
-$uid = (int) ($_GET['user_id'] ?? 0);
-if ($uid < 1) {
-    json_out(400, ['error' => 'user_id is required']);
-}
-try {
-    $st = db()->prepare(
-        'SELECT id, topic, status, item_count, created_at, finished_at, error_message
-         FROM jobs WHERE user_id = ? ORDER BY id DESC LIMIT 100'
-    );
-    $st->execute([$uid]);
-    json_out(200, ['jobs' => $st->fetchAll()]);
-} catch (Throwable $e) {
-    error_log('admin/history.php: ' . $e->getMessage());
-    json_out(500, ['error' => 'Database error']);
-}
-EOF
-
-cat > /var/www/html/api/admin/job.php <<'EOF'
-<?php
-require '/var/www/private/Auth.php';
-require_admin();
-
-$id = (int) ($_GET['job_id'] ?? 0);
-if ($id < 1) {
-    json_out(400, ['error' => 'job_id is required']);
-}
-try {
-    $st = db()->prepare(
-        'SELECT j.id, j.topic, j.status, j.item_count, j.created_at, j.finished_at, j.error_message,
-                j.result_json, u.username
-         FROM jobs j LEFT JOIN users u ON u.id = j.user_id WHERE j.id = ?'
-    );
-    $st->execute([$id]);
-    $row = $st->fetch();
-} catch (Throwable $e) {
-    error_log('admin/job.php: ' . $e->getMessage());
-    json_out(500, ['error' => 'Database error']);
-}
-if (!$row) {
-    json_out(404, ['error' => 'Search not found']);
-}
-$result = json_decode((string) $row['result_json'], true);
-unset($row['result_json']);
-json_out(200, ['job' => $row, 'result' => is_array($result) ? $result : null]);
-EOF
-
-cat > /var/www/html/api/admin/settings.php <<'EOF'
-<?php
-require '/var/www/private/Auth.php';
-require '/var/www/private/Settings.php';
-
-$adminId = require_admin();
-$cfg     = require '/var/www/private/apify.php';
-
-function settings_payload(array $cfg): array
-{
-    $stamp = db()->query('SELECT MAX(updated_at) FROM settings')->fetchColumn();
-    return [
-        'settings'   => load_settings(),
-        'configured' => ['reddit' => !empty($cfg['reddit_actor']), 'x' => !empty($cfg['x_actor'])],
-        'actors'     => ['reddit' => (string) ($cfg['reddit_actor'] ?? ''), 'x' => (string) ($cfg['x_actor'] ?? '')],
-        'updated_at' => $stamp ? (string) $stamp : '',
-    ];
-}
-
-try {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $useReddit = (($_POST['use_reddit'] ?? '0') === '1') ? '1' : '0';
-        $useX      = (($_POST['use_x'] ?? '0') === '1') ? '1' : '0';
-        $range     = ['options' => ['min_range' => 10, 'max_range' => 1000]];
-        $maxReddit = filter_var($_POST['max_items_reddit'] ?? '', FILTER_VALIDATE_INT, $range);
-        $maxX      = filter_var($_POST['max_items_x'] ?? '', FILTER_VALIDATE_INT, $range);
-
-        if ($maxReddit === false || $maxX === false) {
-            json_out(400, ['error' => 'Max items must be a whole number from 10 to 1000.']);
-        }
-        if ($useReddit === '0' && $useX === '0') {
-            json_out(400, ['error' => 'Enable at least one data source.']);
-        }
-        if ($useReddit === '1' && empty($cfg['reddit_actor'])) {
-            json_out(400, ['error' => 'No Reddit actor is configured on the server.']);
-        }
-        if ($useX === '1' && empty($cfg['x_actor'])) {
-            json_out(400, ['error' => 'No X actor is configured on the server.']);
-        }
-
-        $st = db()->prepare(
-            'INSERT INTO settings (name, value, updated_by) VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by)'
-        );
-        foreach ([
-            'use_reddit'       => $useReddit,
-            'use_x'            => $useX,
-            'max_items_reddit' => (string) $maxReddit,
-            'max_items_x'      => (string) $maxX,
-        ] as $name => $value) {
-            $st->execute([$name, $value, $adminId]);
-        }
-    }
-    json_out(200, settings_payload($cfg));
-} catch (Throwable $e) {
-    error_log('admin/settings.php: ' . $e->getMessage());
-    json_out(500, ['error' => 'Database error']);
-}
-EOF
-
-for f in /var/www/html/api/admin/*.php; do php -l "$f"; done
-mkdir -p /var/www/private/admin
-cat > /var/www/private/admin/admin.html <<'EOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
-  <title>Admin - OpinionMap</title>
-  <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="css/style.css?v=3">
-  <link rel="stylesheet" href="admin.php?asset=css">
-  <script src="js/theme.js"></script>
-</head>
-<body>
-  <svg class="sprite" aria-hidden="true" focusable="false"><defs>
-    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
-    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
-    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
-    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
-    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
-    <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 14 6-6 6 6"/></symbol>
-    <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
-  </defs></svg>
-
-  <header class="topbar">
-    <div class="wrap bar">
-      <a class="brand" href="./" aria-label="OpinionMap home">
-        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-          <rect width="32" height="32" rx="9" fill="#6366f1"/>
-          <rect x="7" y="14" width="4" height="11" rx="2" fill="#fff"/>
-          <rect x="14" y="7" width="4" height="18" rx="2" fill="#fff"/>
-          <rect x="21" y="17" width="4" height="8" rx="2" fill="#fff" opacity=".7"/>
-        </svg>
-        <span>OpinionMap</span><span class="pill admin-pill">Admin</span>
-      </a>
-      <div class="bar-actions">
-        <a class="btn btn-ghost" href="app.html">Back to app</a>
-        <button class="icon-btn" id="themeBtn" type="button" aria-label="Toggle dark mode">
-          <svg class="ico ico-moon" aria-hidden="true"><use href="#i-moon"/></svg>
-          <svg class="ico ico-sun" aria-hidden="true"><use href="#i-sun"/></svg>
-        </button>
-        <button class="btn btn-ghost" id="logoutBtn" type="button"><svg class="ico" aria-hidden="true"><use href="#i-logout"/></svg><span>Log out</span></button>
-      </div>
-    </div>
-  </header>
-
-  <main class="wrap adm">
-    <section id="denied" class="card" hidden>
-      <h2>Session expired</h2>
-      <p class="muted">Please log in again with an admin account.</p>
-      <p><a class="btn btn-primary" href="app.html">Go to login</a></p>
-    </section>
-
-    <div id="panel">
-      <div class="adm-head">
-        <div><p class="eyebrow">Control panel</p><h1>Admin</h1></div>
-        <p class="muted small" id="who"></p>
-      </div>
-
-      <div class="tabs adm-tabs" role="tablist">
-        <button class="tab" type="button" role="tab" data-tab="overview" aria-selected="true">Overview</button>
-        <button class="tab" type="button" role="tab" data-tab="users" aria-selected="false">Users</button>
-        <button class="tab" type="button" role="tab" data-tab="settings" aria-selected="false">Settings</button>
-      </div>
-
-      <section id="tab-overview">
-        <div class="kpis" id="kpis"></div>
-        <div class="card" id="srcCard"></div>
-      </section>
-
-      <section id="tab-users" hidden>
-        <div class="card">
-          <div class="toolbar">
-            <div class="field-search">
-              <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
-              <label class="sr" for="userQ">Search users</label>
-              <input id="userQ" type="text" placeholder="Search username" autocomplete="off">
-            </div>
-            <span class="muted small" id="userCount"></span>
-          </div>
-          <div class="table-wrap">
-            <table class="tbl" id="usersTbl">
-              <thead><tr><th>User</th><th>Role</th><th>Joined</th><th>Last login</th><th class="num-r">Searches</th><th>Last search</th><th>Status</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <p class="muted small">Times are server time. Click a user to see their searches.</p>
-        </div>
-
-        <div class="card" id="histCard" hidden>
-          <div class="hist-head"><h3 id="histTitle"></h3><button class="btn btn-ghost" id="histClose" type="button">Close</button></div>
-          <div id="histList"></div>
-        </div>
-      </section>
-
-      <section id="tab-settings" hidden>
-        <form id="setForm" class="card" novalidate>
-          <h3>Data sources</h3>
-          <p class="muted small">Choose which platforms new searches collect from, and how many items to request from each. Changes apply to new searches only. Searches already running are not affected.</p>
-
-          <div class="src-row" id="rowReddit">
-            <div class="src-title"><span class="badge src-reddit">Reddit</span><div><b>Reddit</b><p class="muted small" id="noteReddit"></p></div></div>
-            <label class="switch"><input type="checkbox" id="useReddit"><span class="slider"></span><span class="sr">Use Reddit</span></label>
-            <div class="max">
-              <label for="maxReddit">Max items</label>
-              <div class="max-ctl"><input type="range" id="rngReddit" min="10" max="1000" step="10" aria-label="Max Reddit items slider"><input type="number" id="maxReddit" min="10" max="1000" step="10"></div>
-            </div>
-          </div>
-
-          <div class="src-row" id="rowX">
-            <div class="src-title"><span class="badge src-x">X</span><div><b>X</b><p class="muted small" id="noteX"></p></div></div>
-            <label class="switch"><input type="checkbox" id="useX"><span class="slider"></span><span class="sr">Use X</span></label>
-            <div class="max">
-              <label for="maxX">Max items</label>
-              <div class="max-ctl"><input type="range" id="rngX" min="10" max="1000" step="10" aria-label="Max X items slider"><input type="number" id="maxX" min="10" max="1000" step="10"></div>
-            </div>
-          </div>
-
-          <p class="muted small">More items means longer searches and more Apify credit used. At least one source must stay on.</p>
-          <p class="form-error" id="setMsg" role="alert"></p>
-          <div class="set-foot">
-            <span class="muted small" id="setStamp"></span>
-            <button class="btn btn-primary" id="setSave" type="submit"><span class="btn-label">Save changes</span><span class="spinner" hidden></span></button>
-          </div>
-        </form>
-      </section>
-    </div>
-  </main>
-
-  <div class="modal" id="jobModal" role="dialog" aria-modal="true" aria-labelledby="jobTitle" hidden>
-    <div class="modal-box card">
-      <button class="icon-btn modal-x" id="jobClose" type="button" aria-label="Close"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button>
-      <div id="jobBody"></div>
-    </div>
-  </div>
-
-  <div id="toasts" aria-live="polite"></div>
-
-  <script src="js/jquery.min.js"></script>
-  <script src="admin.php?asset=js"></script>
-</body>
-</html>
-EOF
-
-cat > /var/www/private/admin/admin.css <<'EOF'
-.adm{padding-top:28px;padding-bottom:56px}
-.adm-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:18px}
-.adm-head h1{font-size:1.9rem;letter-spacing:-.02em}
-.admin-pill{background:var(--primary-soft);color:var(--primary)}
-.adm-tabs{grid-template-columns:repeat(3,1fr);max-width:480px;margin-bottom:20px}
-.adm section>.card{margin-bottom:16px}
-.toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
-.field-search{position:relative;flex:1;max-width:360px}
-.field-search .ico{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted)}
-.field-search input{padding-left:38px}
-.table-wrap{overflow-x:auto}
-.tbl{width:100%;border-collapse:collapse;font-size:.92rem}
-.tbl th{text-align:left;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
-.tbl td{padding:12px;border-bottom:1px solid var(--border);white-space:nowrap}
-.tbl tbody tr{cursor:pointer}
-.tbl tbody tr:hover{background:var(--surface-2)}
-.tbl tbody tr.is-on{background:var(--primary-soft)}
-.tbl .num-r{text-align:right}
-.u-name{display:flex;align-items:center;gap:10px;font-weight:600}
-.u-name .avatar{width:30px;height:30px;font-size:.85rem}
-.hist-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
-.j-row{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;text-align:left;padding:12px 8px;border:0;border-top:1px solid var(--border);background:none;border-radius:8px}
-.j-row:hover{background:var(--surface-2)}
-.j-topic{font-weight:600}
-.j-meta{color:var(--muted);font-size:.85rem}
-.st{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.75rem;font-weight:700}
-.st-done{color:var(--pos);background:color-mix(in srgb,var(--pos) 14%,transparent)}
-.st-failed{color:var(--neg);background:color-mix(in srgb,var(--neg) 14%,transparent)}
-.st-run{color:var(--warn);background:var(--warn-bg)}
-.src-line{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--border)}
-.src-line b{margin-left:auto}
-
-.src-row{display:grid;grid-template-columns:1.2fr auto 1.4fr;gap:20px;align-items:center;padding:18px 0;border-top:1px solid var(--border);margin-top:6px}
-.src-row.is-off .max{opacity:.45}
-.src-title{display:flex;align-items:center;gap:12px}
-.src-title p{margin-top:2px}
-.switch{position:relative;display:inline-block;width:50px;height:28px;margin:0;flex:none}
-.switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;padding:0}
-.switch input:disabled{cursor:not-allowed}
-.slider{position:absolute;inset:0;border-radius:99px;background:var(--border);transition:background .2s}
-.slider::before{content:"";position:absolute;left:3px;top:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .2s}
-.switch input:checked+.slider{background:var(--primary)}
-.switch input:checked+.slider::before{transform:translateX(22px)}
-.switch input:focus-visible+.slider{outline:3px solid color-mix(in srgb,var(--primary) 50%,transparent);outline-offset:2px}
-.switch input:disabled+.slider{opacity:.5}
-.max label{margin:0 0 6px}
-.max-ctl{display:flex;align-items:center;gap:12px}
-.max-ctl input[type=range]{flex:1;padding:0;border:0;background:transparent;box-shadow:none;accent-color:var(--primary)}
-.max-ctl input[type=number]{width:96px;flex:none}
-.set-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px}
-
-.bar-row{margin:10px 0}
-.bar-label{display:block;font-size:.85rem;text-transform:capitalize;margin-bottom:4px}
-.modal{position:fixed;inset:0;z-index:80;background:rgba(10,14,25,.55);display:grid;place-items:center;padding:20px}
-.modal-box{position:relative;width:100%;max-width:760px;max-height:88vh;overflow:auto}
-.modal-x{position:absolute;right:14px;top:14px}
-.modal-box h2{padding-right:48px;word-break:break-word}
-.modal-box h3{margin:18px 0 6px}
-.m-post{padding:10px 0;border-top:1px solid var(--border);font-size:.92rem}
-.m-post p{margin-top:4px;white-space:pre-line;word-break:break-word}
-pre.raw{max-height:260px;overflow:auto;background:var(--surface-2);border-radius:12px;padding:12px;font-size:.78rem;white-space:pre-wrap;word-break:break-word;margin-top:8px}
-details summary{cursor:pointer;font-weight:600;margin-top:16px}
-@media (max-width:700px){
-  .src-row{grid-template-columns:1fr auto}
-  .src-row .max{grid-column:1/-1}
-  .adm-head{flex-direction:column;align-items:flex-start}
-}
-EOF
-
-cat > /var/www/private/admin/admin.js <<'EOF'
-$(function () {
-  'use strict';
-
-  var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  var SRC = [{ key: 'reddit', id: 'Reddit', name: 'Reddit' }, { key: 'x', id: 'X', name: 'X' }];
-  var users = [];
-  var timer = null;
-
-  /* ---------- helpers ---------- */
-  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
-  function num(v) { return Number(v) || 0; }
-  function ico(n) { return '<svg class="ico" aria-hidden="true"><use href="#i-' + n + '"/></svg>'; }
-  function safeUrl(u) { return /^https?:\/\//i.test(u || '') ? u : ''; }
-  function when(s) { return s ? String(s).slice(0, 16) : '-'; }
-  function toast(msg, type) {
-    var $t = $('<div class="toast toast-' + (type || 'info') + '" role="status">' + ico(type === 'error' ? 'alert' : 'check') + '<span></span></div>');
-    $t.find('span').text(msg);
-    $('#toasts').append($t);
-    setTimeout(function () { $t.fadeOut(200, function () { $t.remove(); }); }, 5000);
-  }
-  function api(path, data, method) {
-    return $.ajax({ url: 'api/admin/' + path, method: method || 'GET', data: data || {}, dataType: 'json' });
-  }
-  function denied() { $('#panel').prop('hidden', true); $('#denied').prop('hidden', false); }
-  function fail(xhr) {
-    if (xhr.status === 401 || xhr.status === 403) { denied(); return; }
-    toast((xhr.responseJSON && xhr.responseJSON.error) || 'Request failed', 'error');
-  }
-  function kpi(label, value, sub) {
-    return '<div class="kpi"><p class="kpi-label">' + esc(label) + '</p><p class="kpi-value">' + esc(value) +
-           '</p><p class="kpi-sub">' + esc(sub || '') + '</p></div>';
-  }
-  function statusPill(st) {
-    var cls = st === 'done' ? 'done' : (st === 'failed' ? 'failed' : 'run');
-    return '<span class="st st-' + cls + '">' + esc(st) + '</span>';
-  }
-
-  /* ---------- tabs ---------- */
-  function showTab(name) {
-    $('.adm-tabs .tab').each(function () { $(this).attr('aria-selected', $(this).data('tab') === name); });
-    $('#tab-overview, #tab-users, #tab-settings').prop('hidden', true);
-    $('#tab-' + name).prop('hidden', false);
-    if (name === 'overview') { loadOverview(); }
-    if (name === 'users') { loadUsers(); }
-    if (name === 'settings') { loadSettings(); }
-  }
-  $('.adm-tabs').on('click', '.tab', function () { showTab($(this).data('tab')); });
-
-  /* ---------- overview ---------- */
-  function loadOverview() {
-    $.when(api('stats.php'), api('settings.php')).done(function (a, b) {
-      var s = a[0], set = b[0].settings, ok = b[0].configured;
-      $('#kpis').html(
-        kpi('Users', num(s.users), num(s.admins) + ' admin') +
-        kpi('Searches', num(s.searches), num(s.today) + ' in the last 24 hours') +
-        kpi('Running now', num(s.running), 'in progress') +
-        kpi('Failed searches', num(s.failed), 'all time') +
-        kpi('Items collected', num(s.items).toLocaleString(), 'across all searches'));
-      var h = '<h3>Active data sources</h3><p class="muted small">What new searches use right now. Change this in the Settings tab.</p>';
-      SRC.forEach(function (S) {
-        var on = set['use_' + S.key] === '1' && ok[S.key];
-        h += '<div class="src-line"><span class="badge ' + (S.key === 'x' ? 'src-x' : 'src-reddit') + '">' + S.name + '</span>' +
-             '<span>' + (on ? 'On' : 'Off') + '</span><b>' + (on ? 'up to ' + num(set['max_items_' + S.key]) + ' items' : '') + '</b></div>';
-      });
-      $('#srcCard').html(h);
-    }).fail(fail);
-  }
-
-  /* ---------- users ---------- */
-  function loadUsers() {
-    api('users.php', { q: $.trim($('#userQ').val()) }).done(function (d) {
-      users = d.users || [];
-      renderUsers();
-    }).fail(fail);
-  }
-  function renderUsers() {
-    $('#userCount').text(users.length + (users.length === 1 ? ' user' : ' users'));
-    var $b = $('#usersTbl tbody').empty();
-    if (!users.length) { $b.append('<tr><td colspan="7" class="muted">No users found.</td></tr>'); return; }
-    $.each(users, function (i, u) {
-      $b.append('<tr data-id="' + num(u.id) + '" data-name="' + esc(u.username) + '">' +
-        '<td><span class="u-name"><span class="avatar">' + esc(String(u.username).charAt(0).toUpperCase()) + '</span>' + esc(u.username) + '</span></td>' +
-        '<td>' + (u.role === 'admin' ? '<span class="pill pos">Admin</span>' : '<span class="pill">User</span>') + '</td>' +
-        '<td>' + esc(when(u.created_at)) + '</td><td>' + esc(when(u.last_login_at)) + '</td>' +
-        '<td class="num-r">' + num(u.searches) + '</td><td>' + esc(when(u.last_search)) + '</td>' +
-        '<td>' + (num(u.locked) ? '<span class="st st-failed">Locked</span>' : '<span class="st st-done">Active</span>') + '</td></tr>');
-    });
-  }
-  $('#userQ').on('input', function () { clearTimeout(timer); timer = setTimeout(loadUsers, 300); });
-
-  $('#usersTbl tbody').on('click', 'tr[data-id]', function () {
-    var id = $(this).data('id'), name = $(this).data('name');
-    $('#usersTbl tbody tr').removeClass('is-on');
-    $(this).addClass('is-on');
-    $('#histTitle').text('Search history: ' + name);
-    $('#histList').html('<p class="muted small">Loading...</p>');
-    $('#histCard').prop('hidden', false);
-    api('history.php', { user_id: id }).done(function (d) {
-      var jobs = d.jobs || [];
-      if (!jobs.length) { $('#histList').html('<p class="muted small">This user has no searches yet.</p>'); return; }
-      $('#histList').html(jobs.map(function (j) {
-        return '<button type="button" class="j-row" data-id="' + num(j.id) + '"><span><span class="j-topic">' + esc(j.topic) +
-          '</span><br><span class="j-meta">' + esc(when(j.created_at)) + (num(j.item_count) > 0 ? ' &middot; ' + num(j.item_count) + ' items' : '') +
-          '</span></span>' + statusPill(j.status) + '</button>';
-      }).join(''));
-      $('html,body').animate({ scrollTop: $('#histCard').offset().top - 90 }, 250);
-    }).fail(fail);
-  });
-  $('#histClose').on('click', function () { $('#histCard').prop('hidden', true); $('#usersTbl tbody tr').removeClass('is-on'); });
-
-  /* ---------- one search, in a pop-up ---------- */
-  $('#histList').on('click', '.j-row', function () { openJob($(this).data('id')); });
-  function openJob(id) {
-    $('#jobBody').html('<p class="muted">Loading...</p>');
-    $('#jobModal').prop('hidden', false);
-    api('job.php', { job_id: id }).done(function (d) { $('#jobBody').html(jobHtml(d)); })
-      .fail(function (xhr) { $('#jobModal').prop('hidden', true); fail(xhr); });
-  }
-  function closeJob() { $('#jobModal').prop('hidden', true); }
-  $('#jobClose').on('click', closeJob);
-  $('#jobModal').on('click', function (e) { if (e.target === this) { closeJob(); } });
-  $(document).on('keydown', function (e) { if (e.key === 'Escape') { closeJob(); } });
-
-  function jobHtml(d) {
-    var j = d.job, r = d.result;
-    var h = '<p class="eyebrow">Search #' + num(j.id) + '</p><h2 id="jobTitle">' + esc(j.topic) + '</h2>' +
-      '<p class="muted small">By <b>' + esc(j.username || 'unknown') + '</b> &middot; ' + statusPill(j.status) +
-      ' &middot; started ' + esc(when(j.created_at)) + (j.finished_at ? ', finished ' + esc(when(j.finished_at)) : '') + '</p>';
-    if (j.error_message) {
-      h += '<div class="alert warn" role="alert">' + ico('alert') + '<div><strong>Error</strong><span>' + esc(j.error_message) + '</span></div></div>';
-    }
-    if (!r) { return h + '<p class="muted">No result is stored for this search.</p>'; }
-
-    var st = r.stance || {}, maj = r.majority || {}, src = r.sources || {}, f = r.filter || {};
-    h += '<div class="kpis">' +
-      kpi('Posts analyzed', num(r.total), 'Reddit ' + num(src.reddit) + ', X ' + num(src.x)) +
-      kpi('Majority view', num(maj.percent) + '%', maj.label || '') +
-      kpi('Collected', num(f.collected), num(f.off_topic) + ' off-topic') + '</div>';
-
-    h += '<h3>Stance</h3>';
-    ['supportive', 'opposed', 'neutral'].forEach(function (k) {
-      var v = num(st[k]);
-      h += '<div class="bar-row"><span class="bar-label">' + k + ' ' + v + '%</span><div class="track"><div class="fill" style="width:' + Math.min(100, v) + '%"></div></div></div>';
-    });
-
-    if ((r.themes || []).length) {
-      h += '<h3>Themes</h3><ul class="facts">' + r.themes.map(function (t) {
-        return '<li><span>' + esc(t.label) + '</span><b>' + num(t.share) + '%</b></li>';
-      }).join('') + '</ul>';
-    }
-    if ((r.samples || []).length) {
-      h += '<h3>Example posts</h3>' + r.samples.slice(0, 6).map(function (p) {
-        var url = safeUrl(p.url);
-        return '<div class="m-post"><span class="badge ' + (p.source === 'x' ? 'src-x' : 'src-reddit') + '">' + (p.source === 'x' ? 'X' : 'Reddit') + '</span> ' +
-          '<span class="pill">' + esc(p.stance || '') + '</span><p>' + esc(p.text) + '</p>' +
-          (url ? '<a class="link" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">Open original ' + ico('external') + '</a>' : '') + '</div>';
-      }).join('');
-    }
-    h += '<details><summary>Raw result data</summary><pre class="raw">' + esc(JSON.stringify(r, null, 2)) + '</pre></details>';
-    return h;
-  }
-
-  /* ---------- settings ---------- */
-  function syncRow(S) {
-    $('#row' + S.id).toggleClass('is-off', !$('#use' + S.id).prop('checked'));
-  }
-  function fillSettings(d) {
-    SRC.forEach(function (S) {
-      var ok = !!d.configured[S.key];
-      var on = d.settings['use_' + S.key] === '1' && ok;
-      var max = num(d.settings['max_items_' + S.key]) || 500;
-      $('#use' + S.id).prop('checked', on).prop('disabled', !ok);
-      $('#max' + S.id).val(max);
-      $('#rng' + S.id).val(max);
-      $('#note' + S.id).text(ok ? 'Actor: ' + d.actors[S.key] : 'No actor is configured for this source on the server.');
-      syncRow(S);
-    });
-    $('#setStamp').text(d.updated_at ? 'Last changed ' + when(d.updated_at) + ' (server time)' : '');
-    $('#setMsg').text('');
-  }
-  function loadSettings() { api('settings.php').done(fillSettings).fail(fail); }
-
-  SRC.forEach(function (S) {
-    $('#rng' + S.id).on('input', function () { $('#max' + S.id).val(this.value); });
-    $('#max' + S.id).on('input', function () { $('#rng' + S.id).val(this.value); });
-    $('#use' + S.id).on('change', function () { syncRow(S); });
-  });
-
-  $('#setForm').on('submit', function (e) {
-    e.preventDefault();
-    var $m = $('#setMsg').text('');
-    var data = {
-      use_reddit: $('#useReddit').prop('checked') ? 1 : 0,
-      use_x: $('#useX').prop('checked') ? 1 : 0,
-      max_items_reddit: $.trim($('#maxReddit').val()),
-      max_items_x: $.trim($('#maxX').val())
-    };
-    var okNum = function (v) { return /^\d+$/.test(v) && v >= 10 && v <= 1000; };
-    if (!okNum(data.max_items_reddit) || !okNum(data.max_items_x)) { $m.text('Max items must be a whole number from 10 to 1000.'); return; }
-    if (!data.use_reddit && !data.use_x) { $m.text('Enable at least one data source.'); return; }
-
-    var $b = $('#setSave').prop('disabled', true);
-    $b.find('.spinner').prop('hidden', false);
-    api('settings.php', data, 'POST').done(function (d) {
-      fillSettings(d);
-      toast('Settings saved. New searches will use them.', 'ok');
-    }).fail(function (xhr) {
-      if (xhr.status === 401 || xhr.status === 403) { denied(); return; }
-      $m.text((xhr.responseJSON && xhr.responseJSON.error) || 'Could not save the settings.');
-    }).always(function () {
-      $b.prop('disabled', false).find('.spinner').prop('hidden', true);
-    });
-  });
-
-  /* ---------- theme, logout, start ---------- */
-  $('#themeBtn').on('click', function () {
-    var el = document.documentElement;
-    var t = el.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-    el.setAttribute('data-theme', t);
-    try { localStorage.setItem('om-theme', t); } catch (e) {}
-  });
-  $('#logoutBtn').on('click', function () {
-    $.post('api/logout.php').always(function () { location.href = './'; });
-  });
-
-  $.getJSON('api/me.php').done(function (d) { $('#who').text('Signed in as ' + d.username); });
-  showTab('overview');
-});
-EOF
-
-cat > /var/www/html/admin.php <<'EOF'
-<?php
-require '/var/www/private/Auth.php';
-
-// Anyone who is not a logged-in admin gets the normal "page not found" screen.
-$uid = current_user_id();
-if (!is_admin($uid)) {
-    http_response_code(404);
-    header('Content-Type: text/html; charset=utf-8');
-    readfile(__DIR__ . '/404.html');
-    exit;
-}
-
-header('Cache-Control: no-store');
-$asset = $_GET['asset'] ?? '';
-if ($asset === 'js') {
-    header('Content-Type: application/javascript; charset=utf-8');
-    readfile('/var/www/private/admin/admin.js');
-} elseif ($asset === 'css') {
-    header('Content-Type: text/css; charset=utf-8');
-    readfile('/var/www/private/admin/admin.css');
-} else {
-    header('Content-Type: text/html; charset=utf-8');
-    readfile('/var/www/private/admin/admin.html');
-}
-EOF
-
-php -l /var/www/html/admin.php
-cat > /var/www/html/api/me.php <<'EOF'
-<?php
-require '/var/www/private/Auth.php';
-
-$id = current_user_id();
-if ($id < 1) {
-    json_out(401, ['error' => 'Not logged in']);
-}
-json_out(200, [
-    'username' => (string) ($_SESSION['username'] ?? ''),
-    'role'     => user_role($id),
-]);
-EOF
-
-cat > /var/www/html/js/adminlink.js <<'EOF'
-(function () {
-  'use strict';
-  function check() {
-    if (!window.fetch) { return; }
-    fetch('api/me.php', { credentials: 'same-origin', cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) {
-        var a = document.getElementById('adminLink');
-        if (a) { a.hidden = !(d && d.role === 'admin'); }
-      })
-      .catch(function () {});
-  }
-  check();
-  if (window.jQuery) {
-    jQuery(document).ajaxComplete(function (e, xhr, s) {
-      if (/api\/(login|register|logout)\.php/.test(s.url)) { setTimeout(check, 300); }
-    });
-  }
-})();
-EOF
-
-sed -i 's|<button class="btn btn-ghost" id="logoutBtn" type="button">|<a class="btn btn-ghost" id="adminLink" href="admin.php" hidden>Admin</a>\n          &|' /var/www/html/app.html
-sed -i 's|<script src="js/app.js?v=3"></script>|&\n  <script src="js/adminlink.js"></script>|' /var/www/html/app.html
-grep -n "adminLink\|adminlink" /var/www/html/app.html
-cat > /var/www/private/worker.php <<'EOF'
-<?php
-require __DIR__ . '/Database.php';
-require __DIR__ . '/Settings.php';
-require __DIR__ . '/Apify.php';
-require __DIR__ . '/Normalize.php';
-require __DIR__ . '/Analysis.php';
-
-$jobId = (int) ($argv[1] ?? 0);
-if ($jobId < 1) {
-    fwrite(STDERR, "Usage: php worker.php JOB_ID\n");
-    exit(1);
 }
 
 function say(int $id, string $status, string $msg): void
@@ -1998,3 +1148,853 @@ rm -rf .git
 cd ..
 git init
 git status
+sudo find /   -type f   -path '*/.vscode-server/cli/servers/Stable-2a59476c9bfcb90b3ddc372c36762471b7dfad1c/server/node_modules/@github/copilot-sdk/node_modules/zod/v4/locales/mk.js'   -print 2>/dev/null
+git add .
+git commit -m"2nd commit,still testing"
+git push main origin
+git push origin main
+cd /home/ubuntu
+rm -rf /home/ubuntu/.codex/.tmp/plugins
+cd .codex/
+echo "--- 1. Is whisper in the page? (expect 2 lines)"
+grep -n "whisper" /var/www/html/app.html
+echo "--- 2. Do the files load? (expect: 200 200)"
+curl -s -o /dev/null -w "%{http_code} " http://localhost/js/whisper.js; curl -s -o /dev/null -w "%{http_code}\n" http://localhost/css/whisper.css
+echo "--- 3. How does app.js load results? (expect a results.php line)"
+grep -n "results.php" /var/www/html/js/app.js
+echo "--- 4. Did the faulty command touch app.js? (expect nothing)"
+grep -n "omWhisper" /var/www/html/js/app.js
+sudo nano /var/www/html/app.html
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path("/var/www/html/app.html")
+t = p.read_text(encoding="utf-8")
+css = '  <link rel="stylesheet" href="css/whisper.css?v=1">\n'
+js = '  <script src="js/whisper.js"></script>\n'
+
+if "whisper.css" not in t:
+    t = t.replace("</head>", css + "</head>", 1)
+if "whisper.js" not in t:
+    t = t.replace("</body>", js + "</body>", 1)
+
+p.write_text(t, encoding="utf-8")
+print("done")
+PY
+
+grep -n "whisper" /var/www/html/app.html
+ls -l /var/www/html/app.html
+sudo mariadb opinionmap -e "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS apify_runs VARCHAR(500) NULL; DESCRIBE jobs;"
+cat > /var/www/private/Apify.php <<'EOF'
+<?php
+// Thrown when the user cancels a search.
+class JobCancelled extends RuntimeException {}
+
+function apify_cfg(): array
+{
+    static $cfg = null;
+    if ($cfg === null) {
+        $cfg = require __DIR__ . '/apify.php';
+    }
+    return $cfg;
+}
+
+// One call to the Apify web API. Returns the decoded JSON.
+function apify_call(string $method, string $path, ?array $body = null, int $timeout = 120): array
+{
+    $cfg = apify_cfg();
+    $ch  = curl_init('https://api.apify.com/v2' . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST  => $method,
+        CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $cfg['token'], 'Content-Type: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+    ]);
+    if ($body !== null) {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+    }
+    $raw  = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+
+    if ($raw === false) {
+        throw new RuntimeException('Cannot reach Apify: ' . $err);
+    }
+    $json = json_decode($raw, true);
+    if ($code >= 400) {
+        $msg = (is_array($json) && isset($json['error']['message'])) ? $json['error']['message'] : $raw;
+        throw new RuntimeException("Apify error {$code}: " . substr((string) $msg, 0, 300));
+    }
+    return is_array($json) ? $json : [];
+}
+
+// Delete a dataset on Apify's side so no copy of the posts is kept there.
+function apify_drop_dataset(string $datasetId): void
+{
+    try {
+        apify_call('DELETE', "/datasets/{$datasetId}", null, 30);
+    } catch (Throwable $e) {
+        error_log('apify dataset delete: ' . $e->getMessage());
+    }
+}
+
+// Start an actor, wait for it to end, and download whatever results it produced.
+// $onStart(runId) is called as soon as the run exists. $cancelled() is checked while waiting.
+function apify_run_and_collect(
+    string $actor,
+    array $input,
+    int $maxItems,
+    ?callable $onStart = null,
+    ?callable $cancelled = null,
+    int $maxWaitSec = 900
+): array {
+    $actorId   = str_replace('/', '~', $actor);
+    $run       = apify_call('POST', "/acts/{$actorId}/runs", $input)['data'];
+    $runId     = $run['id'];
+    $datasetId = $run['defaultDatasetId'];
+    if ($onStart) {
+        $onStart($runId);
+    }
+
+    $stop = function () use ($runId, $datasetId): void {
+        try {
+            apify_call('POST', "/actor-runs/{$runId}/abort", null, 20);
+        } catch (Throwable $e) {
+            // the run may already be over
+        }
+        apify_drop_dataset($datasetId);
+        throw new JobCancelled('cancelled');
+    };
+
+    $deadline  = time() + $maxWaitSec;
+    $endedWith = null;
+    $note      = '';
+
+    while (true) {
+        if ($cancelled && $cancelled()) {
+            $stop();
+        }
+        // waitForFinish makes Apify hold the request for up to 15 seconds
+        $info   = apify_call('GET', "/actor-runs/{$runId}?waitForFinish=15", null, 45)['data'];
+        $status = $info['status'];
+        $note   = (string) ($info['statusMessage'] ?? '');
+        if ($status === 'SUCCEEDED') {
+            break;
+        }
+        if (in_array($status, ['FAILED', 'ABORTED', 'TIMED-OUT'], true)) {
+            $endedWith = $status;
+            break;
+        }
+        if (time() > $deadline) {
+            try {
+                apify_call('POST', "/actor-runs/{$runId}/abort", null, 20);
+            } catch (Throwable $e) {
+            }
+            $endedWith = 'ABORTED (stopped by us after waiting too long)';
+            break;
+        }
+    }
+    if ($cancelled && $cancelled()) {
+        $stop();
+    }
+
+    $items  = [];
+    $offset = 0;
+    $page   = 500;
+    while (count($items) < $maxItems) {
+        $batch = apify_call('GET', "/datasets/{$datasetId}/items?format=json&clean=true&limit={$page}&offset={$offset}");
+        foreach ($batch as $row) {
+            $items[] = $row;
+        }
+        if (count($batch) < $page) {
+            break;
+        }
+        $offset += $page;
+    }
+    apify_drop_dataset($datasetId);       // we keep our own copy; nothing stays on Apify
+
+    if ($endedWith !== null) {
+        $why = $endedWith . ($note !== '' ? " ({$note})" : '');
+        if (!$items) {
+            throw new RuntimeException("Apify run ended with status {$why} and returned no data");
+        }
+        echo 'NOTE: Apify run ended with status ' . $why . ' but returned ' . count($items) . " items, so we use them\n";
+    }
+    return array_slice($items, 0, $maxItems);
+}
+EOF
+
+php -l /var/www/private/Apify.php
+cat > /var/www/private/worker.php <<'EOF'
+<?php
+require __DIR__ . '/Database.php';
+require __DIR__ . '/Settings.php';
+require __DIR__ . '/Apify.php';
+require __DIR__ . '/Normalize.php';
+require __DIR__ . '/Analysis.php';
+
+$jobId = (int) ($argv[1] ?? 0);
+if ($jobId < 1) {
+    fwrite(STDERR, "Usage: php worker.php JOB_ID\n");
+    exit(1);
+}
+
+function say(int $id, string $status, string $msg): void
+{
+    echo date('H:i:s') . " [{$status}] {$msg}\n";
+    db()->prepare('UPDATE jobs SET status = ?, message = ? WHERE id = ?')->execute([$status, $msg, $id]);
+}
+
+// A cancelled search is deleted, so "missing" means "cancelled".
+function still_wanted(int $id): bool
+{
+    $q = db()->prepare('SELECT COUNT(*) FROM jobs WHERE id = ?');
+    $q->execute([$id]);
+    return (int) $q->fetchColumn() > 0;
+}
+
+// Remove everything this search stored, so no half-finished data is left behind.
+function discard_job_data(int $id, ?string $rawFile): void
+{
+    try {
+        db()->prepare('DELETE FROM comments WHERE job_id = ?')->execute([$id]);
+    } catch (Throwable $e) {
+        error_log('discard_job_data: ' . $e->getMessage());
+    }
+    foreach ([$rawFile, __DIR__ . "/raw/job_{$id}.json.gz", __DIR__ . "/tmp/job_{$id}_in.json", __DIR__ . "/tmp/job_{$id}_out.json"] as $f) {
+        if ($f && is_file($f)) {
+            @unlink($f);
+        }
+    }
+}
+
+function reddit_input(string $topic, int $limit): array
+{
+    return [
+        'searches'          => [$topic],
+        'searchPosts'       => true,
+        'searchComments'    => false,
+        'searchCommunities' => false,
+        'searchUsers'       => false,
+        'ignoreStartUrls'   => true,
+        'skipComments'      => false,
+        'skipUserPosts'     => true,
+        'skipCommunity'     => true,
+        'includeNSFW'       => false,
+        'sort'              => 'relevance',
+        'time'              => 'year',
+        'maxItems'          => $limit,
+        'maxPostCount'      => max(3, (int) ceil($limit / 10)),
+        'maxComments'       => 10,
+        'scrollTimeout'     => 40,
+        'navigationTimeout' => 60,
+        'proxy'             => ['useApifyProxy' => true, 'apifyProxyGroups' => ['RESIDENTIAL']],
+    ];
+}
+
+function x_input(string $topic, int $limit): array
+{
+    $extra = apify_cfg()['x_extra_input'] ?? [];
+    return array_merge(
+        ['searchTerms' => [$topic . ' lang:en -filter:retweets'], 'maxItems' => $limit],
+        $extra
+    );
+}
+
+$stmt = db()->prepare('SELECT topic FROM jobs WHERE id = ?');
+$stmt->execute([$jobId]);
+$topic = $stmt->fetchColumn();
+if ($topic === false) {
+    fwrite(STDERR, "Job {$jobId} not found (cancelled?)\n");
+    exit(0);
+}
+
+// Admin-controlled settings: which sources are on, and how many items to ask each for
+$cfg = apify_cfg();
+$set = load_settings();
+$limit = [
+    'reddit' => max(10, min(1000, (int) $set['max_items_reddit'])),
+    'x'      => max(10, min(1000, (int) $set['max_items_x'])),
+];
+
+$sources = [];
+if ($set['use_reddit'] === '1' && !empty($cfg['reddit_actor'])) {
+    $sources['reddit'] = [$cfg['reddit_actor'], reddit_input($topic, $limit['reddit']), 'normalize_reddit_item', $limit['reddit']];
+}
+if ($set['use_x'] === '1' && !empty($cfg['x_actor'])) {
+    $sources['x'] = [$cfg['x_actor'], x_input($topic, $limit['x']), 'normalize_x_item', $limit['x']];
+}
+
+try {
+    if (!$sources) {
+        throw new RuntimeException('No data source is enabled. An admin can turn one on in the Admin page.');
+    }
+
+    $wanted  = fn(): bool => still_wanted($jobId);
+    $onStart = function (string $runId) use ($jobId): void {
+        db()->prepare("UPDATE jobs SET apify_runs = CONCAT_WS(',', apify_runs, ?) WHERE id = ?")->execute([$runId, $jobId]);
+    };
+
+    $raw      = [];
+    $rows     = [];
+    $warnings = [];
+
+    foreach ($sources as $name => [$actor, $input, $normalize, $max]) {
+        if (!$wanted()) {
+            throw new JobCancelled('cancelled');
+        }
+        say($jobId, 'collecting', 'Collecting from ' . ucfirst($name) . " (up to {$max} items)...");
+        try {
+            $items = apify_run_and_collect($actor, $input, $max, $onStart, $wanted);
+        } catch (JobCancelled $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $warnings[] = ucfirst($name) . ': ' . $e->getMessage();
+            echo 'WARNING ' . end($warnings) . "\n";
+            continue;
+        }
+        $raw[$name] = $items;
+        foreach ($items as $item) {
+            $row = $normalize($item);
+            if ($row !== null) {
+                $rows[] = $row;
+            }
+        }
+    }
+    if (!$raw) {
+        throw new RuntimeException($warnings ? implode(' | ', $warnings) : 'No data was collected');
+    }
+    if (!$wanted()) {
+        throw new JobCancelled('cancelled');
+    }
+
+    // Raw data, exactly as Apify returned it, compressed
+    $file = __DIR__ . "/raw/job_{$jobId}.json.gz";
+    file_put_contents($file, gzencode(json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 6));
+    if (!$wanted()) {
+        throw new JobCancelled('cancelled');
+    }
+
+    // Cleaned rows
+    $pdo = db();
+    $ins = $pdo->prepare(
+        'INSERT IGNORE INTO comments (job_id, source, external_id, kind, community, body, score, created_at_src, url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $pdo->beginTransaction();
+    foreach ($rows as $r) {
+        $ins->execute([$jobId, $r['source'], $r['external_id'], $r['kind'], $r['community'],
+                       $r['body'], $r['score'], $r['created'], $r['url']]);
+    }
+    $pdo->commit();
+
+    $c = $pdo->prepare('SELECT COUNT(*) FROM comments WHERE job_id = ?');
+    $c->execute([$jobId]);
+    $total = (int) $c->fetchColumn();
+    if ($total === 0) {
+        throw new RuntimeException('The actors returned no usable posts. Check their input settings.');
+    }
+    if (!$wanted()) {
+        throw new JobCancelled('cancelled');
+    }
+
+    // Python analysis
+    say($jobId, 'analyzing', "Analyzing {$total} items...");
+    $result = run_analysis($jobId, $topic, $warnings);
+    if (!$wanted()) {
+        throw new JobCancelled('cancelled');
+    }
+
+    $done = $pdo->prepare("UPDATE jobs SET status = 'done', message = 'Done', result_json = ?, raw_file = ?,
+                           item_count = ?, finished_at = NOW() WHERE id = ?");
+    $done->execute([
+        json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+        $file, $total, $jobId,
+    ]);
+    if ($done->rowCount() === 0) {
+        throw new JobCancelled('cancelled while finishing');
+    }
+    echo "Done: {$total} items stored and analyzed\n";
+
+} catch (JobCancelled $e) {
+    echo "Cancelled by the user: discarding everything\n";
+    if (db()->inTransaction()) {
+        db()->rollBack();
+    }
+    discard_job_data($jobId, $file ?? null);
+    exit(0);
+} catch (Throwable $e) {
+    echo 'FAILED: ' . $e->getMessage() . "\n";
+    if (db()->inTransaction()) {
+        db()->rollBack();
+    }
+    discard_job_data($jobId, $file ?? null);      // keep only the error message, no half-finished data
+    db()->prepare("UPDATE jobs SET status = 'failed', error_message = ?, raw_file = NULL, finished_at = NOW() WHERE id = ?")
+        ->execute([substr($e->getMessage(), 0, 500), $jobId]);
+    exit(1);
+}
+EOF
+
+php -l /var/www/private/worker.php
+cat > /var/www/html/api/cancel.php <<'EOF'
+<?php
+require '/var/www/private/Auth.php';
+require '/var/www/private/Apify.php';
+
+$userId = require_login();
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    json_out(405, ['error' => 'Use POST']);
+}
+set_time_limit(60);
+
+try {
+    $q = db()->prepare(
+        "SELECT id, raw_file, apify_runs FROM jobs
+         WHERE user_id = ? AND status IN ('queued','collecting','analyzing')"
+    );
+    $q->execute([$userId]);
+    $jobs = $q->fetchAll();
+
+    foreach ($jobs as $j) {
+        $id = (int) $j['id'];
+
+        // 1. Delete the search. Its collected posts go with it, and the worker notices and stops.
+        db()->prepare('DELETE FROM jobs WHERE id = ? AND user_id = ?')->execute([$id, $userId]);
+
+        // 2. Delete every file this search created
+        $files = [(string) $j['raw_file']];
+        foreach (['raw/job_%d.json.gz', 'tmp/job_%d_in.json', 'tmp/job_%d_out.json', 'logs/job_%d.log'] as $pattern) {
+            $files[] = '/var/www/private/' . sprintf($pattern, $id);
+        }
+        foreach ($files as $f) {
+            if (strpos($f, '/var/www/private/') === 0 && is_file($f)) {
+                @unlink($f);
+            }
+        }
+
+        // 3. Stop the Apify runs so no more credit is used
+        foreach (explode(',', (string) $j['apify_runs']) as $run) {
+            if (preg_match('/^[A-Za-z0-9]{5,40}$/', $run)) {
+                try {
+                    apify_call('POST', "/actor-runs/{$run}/abort", null, 20);
+                } catch (Throwable $e) {
+                    // the run had already finished
+                }
+            }
+        }
+    }
+    json_out(200, ['cancelled' => count($jobs)]);
+} catch (Throwable $e) {
+    error_log('cancel.php: ' . $e->getMessage());
+    json_out(500, ['error' => 'Could not cancel. Please try again.']);
+}
+EOF
+
+php -l /var/www/html/api/cancel.php
+cat > /var/www/private/cleanup.php <<'EOF'
+<?php
+require __DIR__ . '/Database.php';
+
+$maxAge   = 2 * 3600;            // raw files live at most 2 hours
+$maxBytes = 300 * 1024 * 1024;   // hard cap for the whole raw folder
+$removed  = 0;
+$stuck    = 0;
+
+// 1. Raw files: too old, or the folder is too big (oldest go first)
+$files = glob(__DIR__ . '/raw/job_*.json.gz') ?: [];
+usort($files, fn($a, $b) => filemtime($a) <=> filemtime($b));
+$total = array_sum(array_map('filesize', $files));
+foreach ($files as $f) {
+    if ((time() - filemtime($f)) > $maxAge || $total > $maxBytes) {
+        $total -= filesize($f);
+        unlink($f);
+        db()->prepare('UPDATE jobs SET raw_file = NULL WHERE raw_file = ?')->execute([$f]);
+        $removed++;
+    }
+}
+
+// 2. Leftover temporary files from interrupted analyses
+foreach (glob(__DIR__ . '/tmp/*.json') ?: [] as $t) {
+    if (time() - filemtime($t) > 3600) {
+        unlink($t);
+    }
+}
+
+// 3. Searches stuck "in progress" for over 30 minutes: mark failed and discard their data
+$rows = db()->query(
+    "SELECT id, raw_file FROM jobs
+     WHERE status IN ('queued','collecting','analyzing') AND created_at < (NOW() - INTERVAL 30 MINUTE)"
+)->fetchAll();
+foreach ($rows as $j) {
+    db()->prepare('DELETE FROM comments WHERE job_id = ?')->execute([$j['id']]);
+    if ($j['raw_file'] && is_file($j['raw_file'])) {
+        unlink($j['raw_file']);
+    }
+    db()->prepare("UPDATE jobs SET status = 'failed', error_message = 'Timed out', raw_file = NULL, finished_at = NOW() WHERE id = ?")
+        ->execute([$j['id']]);
+    $stuck++;
+}
+
+// 4. Cleaned post text is kept 7 days (finished results stay in the jobs table)
+db()->exec("DELETE FROM comments WHERE job_id IN (SELECT id FROM jobs WHERE created_at < (NOW() - INTERVAL 7 DAY))");
+
+// 5. Test searches that no user owns (nobody can see them), after 1 day
+db()->exec("DELETE FROM jobs WHERE user_id IS NULL AND created_at < (NOW() - INTERVAL 1 DAY)");
+
+// 6. Old logs
+foreach (glob(__DIR__ . '/logs/job_*.log') ?: [] as $l) {
+    if (time() - filemtime($l) > 7 * 86400) {
+        unlink($l);
+    }
+}
+echo date('Y-m-d H:i:s') . " cleanup done, raw files removed: {$removed}, stuck searches closed: {$stuck}\n";
+EOF
+
+php -l /var/www/private/cleanup.php
+php /var/www/private/cleanup.php
+cat > /var/www/html/js/cancel.js <<'EOF'
+(function ($) {
+  'use strict';
+  if (!$) { return; }
+
+  var $analyze = $('#analyzeBtn');
+  if (!$analyze.length) { return; }
+
+  $('<style>').text(
+    '.btn-cancel{background:#dc2626;color:#fff;border-color:transparent}' +
+    '.btn-cancel:hover:not(:disabled){background:#b91c1c}' +
+    '.btn-cancel:disabled{opacity:.7;cursor:wait}'
+  ).appendTo('head');
+
+  var $cancel = $(
+    '<button class="btn btn-cancel" id="cancelBtn" type="button" hidden>' +
+    '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>' +
+    '<span class="btn-label">Cancel</span></button>'
+  );
+  $analyze.after($cancel);
+
+  // While a search runs the app disables Analyze: swap it for Cancel.
+  function sync() {
+    var running = $analyze.prop('disabled');
+    $analyze.prop('hidden', running);
+    $cancel.prop('hidden', !running);
+    if (!running) { $cancel.prop('disabled', false).find('.btn-label').text('Cancel'); }
+  }
+  if (window.MutationObserver) {
+    new MutationObserver(sync).observe($analyze[0], { attributes: true, attributeFilter: ['disabled'] });
+  }
+  sync();
+
+  function toast(msg, type) {
+    var $t = $('<div class="toast toast-' + (type || 'info') + '" role="status"><span></span></div>');
+    $t.find('span').text(msg);
+    $('#toasts').append($t);
+    setTimeout(function () { $t.fadeOut(200, function () { $t.remove(); }); }, 5000);
+  }
+
+  $cancel.on('click', function () {
+    var topic = $.trim($('#topic').val());
+    $cancel.prop('disabled', true).find('.btn-label').text('Cancelling...');
+    $.ajax({ url: 'api/cancel.php', method: 'POST', dataType: 'json' })
+      .done(function (d) {
+        try {
+          sessionStorage.setItem('om-cancel-msg',
+            d.cancelled > 0 ? 'Search cancelled. Nothing was saved.' : 'That search had already finished.');
+          if (topic) { sessionStorage.setItem('om-cancel-topic', topic); }
+        } catch (e) {}
+        location.reload();      // resets the page to a clean state
+      })
+      .fail(function (xhr) {
+        $cancel.prop('disabled', false).find('.btn-label').text('Cancel');
+        toast((xhr.responseJSON && xhr.responseJSON.error) || 'Could not cancel. Please try again.', 'error');
+      });
+  });
+
+  // After the reload: show the message and put the topic back in the search box
+  $(function () {
+    var msg = null, topic = null;
+    try {
+      msg = sessionStorage.getItem('om-cancel-msg');
+      topic = sessionStorage.getItem('om-cancel-topic');
+      sessionStorage.removeItem('om-cancel-msg');
+      sessionStorage.removeItem('om-cancel-topic');
+    } catch (e) {}
+    if (topic) { $('#topic').val(topic); }
+    if (msg) { setTimeout(function () { toast(msg, 'ok'); }, 600); }
+  });
+})(window.jQuery);
+EOF
+
+cat > /var/www/html/js/whisper.js <<'EOF'
+(function ($) {
+  'use strict';
+  if (!$) { return; }
+
+  var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  var KEYS = ['supportive', 'opposed', 'neutral'];
+  var ST = {
+    supportive: { name: 'Supportive', cls: 'pos' },
+    opposed:    { name: 'Opposed',    cls: 'neg' },
+    neutral:    { name: 'Neutral',    cls: 'neu' }
+  };
+  var SUGG = [
+    'What are the supporters hoping for?',
+    'What worries the people who are opposed?',
+    'Where do people disagree the most?',
+    'What do the neutral voices say?'
+  ];
+  var SUB = 'Let Gemini read the room: a plain-language summary, the moods behind each side, and answers to your questions about this discussion.';
+  var SPARK = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>';
+  var UP = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>';
+  var DOWN = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  var cur = { jobId: 0, ins: null, model: '' };
+  var lastJob = 0;
+  var decoder = document.createElement('textarea');
+
+  /* ---------- helpers ---------- */
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
+  // turns codes like &#39; and &quot; back into real characters (safe: a textarea never runs markup)
+  function plain(s) { decoder.innerHTML = String(s == null ? '' : s); return decoder.value; }
+  function num(v) { return Number(v) || 0; }
+  function safeUrl(u) { return /^https?:\/\//i.test(u || '') ? u : ''; }
+  function errMsg(xhr, fallback) { return (xhr && xhr.responseJSON && xhr.responseJSON.error) || fallback; }
+  function srcName(p) { return (p.source === 'x' ? 'X' : 'Reddit') + (p.community ? ' r/' + p.community : ''); }
+  function postLink(p) {
+    var u = safeUrl(p.url);
+    return u ? ' <a class="link" href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">Open original</a>' : '';
+  }
+  function modelLabel(id) {
+    id = String(id || '').replace(/^models\//, '');
+    var parts = id.replace(/^gemini-?/i, '').split('-').filter(Boolean);
+    if (!parts.length) { return 'Gemini'; }
+    return 'Gemini ' + parts.map(function (p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join(' ');
+  }
+  function setBtn(label) { $('#whisperBtn .btn-label').text(label); }
+  function note(msg) { $('#whisperNote').text(msg || ''); }
+  function updateFoot() {
+    $('#wFoot').text('Written by ' + modelLabel(cur.model) + ' from a sample of the posts.').attr('title', cur.model || '');
+  }
+
+  /* ---------- the card ---------- */
+  function cardHtml() {
+    return '<section class="card whisper" id="whisper">' +
+      '<div class="whisper-head"><span class="whisper-ico">' + SPARK + '</span>' +
+      '<div><h3>Crowd Whisperer</h3><p class="muted small" id="whisperSub">' + esc(SUB) + '</p></div>' +
+      '<button class="btn btn-primary" id="whisperBtn" type="button">' + SPARK + '<span class="btn-label">Whisper to the crowd</span><span class="spinner" hidden></span></button>' +
+      '<button class="icon-btn" id="wExpand" type="button" hidden aria-label="Expand Crowd Whisperer" title="Expand">' + DOWN + '</button></div>' +
+      '<p class="form-error" id="whisperNote" role="alert"></p>' +
+      '<div id="whisperBody" hidden></div></section>';
+  }
+
+  function mount(jobId) {
+    if (cur.jobId === jobId && $('#whisper').length) { return; }
+    cur = { jobId: jobId, ins: null, model: '' };
+    $('#whisper').remove();
+    var $card = $(cardHtml());
+    var $anchor = $('#results .kpis').first();
+    if ($anchor.length) { $anchor.after($card); } else { $('#results').prepend($card); }
+
+    $.getJSON('api/ai_get.php', { job_id: jobId }).done(function (g) {
+      if (cur.jobId !== jobId) { return; }
+      if (!g.enabled) {
+        $('#whisperBtn').prop('disabled', true);
+        note('The AI helper is not set up on the server yet.');
+        return;
+      }
+      if (g.insights) {
+        cur.ins = g.insights;
+        cur.model = g.model || '';
+        showPanel();
+        setBtn('Re-read the room');
+      } else if (num(g.posts) < 5) {
+        $('#whisperBtn').prop('disabled', true);
+        note('The post data for this search is no longer available. Run the search again to use this feature.');
+      }
+    });
+  }
+
+  $(document).ajaxSuccess(function (e, xhr, s, d) {
+    if (s && s.url && s.url.indexOf('results.php') !== -1 && d && d.job_id && d.status === 'done') {
+      lastJob = d.job_id;
+      mount(d.job_id);
+    }
+  });
+
+  // Safety net: if the results area is redrawn by another script, put the card back.
+  function ensureCard() {
+    var $r = $('#results');
+    if (!$r.length || $r.prop('hidden') || !$r.find('.kpis').length || $('#whisper').length) { return; }
+    var id = Number($('.h-item.is-on').first().data('id')) || lastJob;
+    if (id) { mount(id); }
+  }
+  var host = document.getElementById('results');
+  if (host && window.MutationObserver) {
+    new MutationObserver(ensureCard).observe(host, { childList: true });
+  }
+
+  /* ---------- collapse / expand ---------- */
+  function setCollapsed(on, instant) {
+    var $c = $('#whisper');
+    if (!$c.length) { return; }
+    var speed = instant ? 0 : 200;
+    $c.toggleClass('is-collapsed', on);
+    $('#wExpand').prop('hidden', !on);
+    $('#whisperBtn').prop('hidden', on);
+    $('#whisperSub').text(on ? ((cur.ins && cur.ins.headline) || SUB) : SUB).toggleClass('w-clamp', on);
+    $('#wCollapse').attr('aria-expanded', on ? 'false' : 'true');
+    if (on) { $('#whisperBody').stop(true, true).slideUp(speed); }
+    else { $('#whisperBody').stop(true, true).slideDown(speed); }
+  }
+  $(document).on('click', '#wCollapse', function () { setCollapsed(true); });
+  $(document).on('click', '#wExpand', function () { setCollapsed(false); });
+  $(document).on('click', '#whisper.is-collapsed .whisper-head > div', function () { setCollapsed(false); });
+
+  /* ---------- panel ---------- */
+  function tabBtn(key, label, on) {
+    return '<button type="button" class="w-tab" role="tab" data-tab="' + key + '" aria-selected="' + (on ? 'true' : 'false') + '">' + label + '</button>';
+  }
+  function listHtml(title, items) {
+    if (!items || !items.length) { return ''; }
+    return '<div class="w-box"><h4>' + esc(title) + '</h4><ul>' +
+      items.map(function (x) { return '<li>' + esc(plain(x)) + '</li>'; }).join('') + '</ul></div>';
+  }
+  function gistHtml(i) {
+    var h = '<p class="w-headline">' + esc(plain(i.headline)) + '</p><p class="w-summary">' + esc(plain(i.summary)) + '</p>';
+    var two = listHtml('Most people agree that', i.agree) + listHtml('People argue about', i.disagree);
+    if (two) { h += '<div class="w-two">' + two + '</div>'; }
+    return h + '<div class="w-cols">' + KEYS.map(function (k) {
+      var g = (i.stances || {})[k] || {};
+      return '<div class="w-col"><h4><span class="dot ' + ST[k].cls + '"></span>' + ST[k].name + '</h4><p class="small">' +
+        esc(plain(g.summary || 'No posts in this group.')) + '</p></div>';
+    }).join('') + '</div>';
+  }
+  function tagHtml(t) {
+    var ex = t.example;
+    return '<div class="w-tag"><div class="w-tag-top"><span class="pill w-pill">' + esc(plain(t.tag)) + '</span><b>~' + num(t.share_pct) + '%</b></div>' +
+      '<div class="track"><div class="fill" style="width:' + Math.min(100, num(t.share_pct)) + '%"></div></div>' +
+      (ex ? '<blockquote>' + esc(plain(ex.text)) + '</blockquote><span class="small muted">Most typical post, ' + esc(srcName(ex)) + '</span>' + postLink(ex) : '') + '</div>';
+  }
+  function moodHtml(i) {
+    return '<p class="muted small">The tones and emotions Gemini found in each group, with a rough share of that group and its most typical post. Percentages are estimates from a sample of posts.</p><div class="w-cols">' +
+      KEYS.map(function (k) {
+        var g = (i.stances || {})[k] || { tags: [] };
+        return '<div class="w-col"><h4><span class="dot ' + ST[k].cls + '"></span>' + ST[k].name + '</h4>' +
+          ((g.tags && g.tags.length) ? g.tags.map(tagHtml).join('') : '<p class="muted small">No posts in this group.</p>') + '</div>';
+      }).join('') + '</div>';
+  }
+  function askHtml() {
+    return '<form id="askForm" class="w-ask" autocomplete="off"><label class="sr" for="askQ">Ask a question about this discussion</label>' +
+      '<input id="askQ" type="text" maxlength="300" placeholder="e.g. What worries the people who are opposed?">' +
+      '<button class="btn btn-primary" id="askBtn" type="submit"><span class="btn-label">Ask</span></button></form>' +
+      '<div class="w-suggest">' + SUGG.map(function (s) { return '<button type="button" class="wchip">' + esc(s) + '</button>'; }).join('') + '</div>' +
+      '<div id="askLog"></div>';
+  }
+  function showPanel() {
+    var i = cur.ins;
+    var h = '<div class="w-tabs" role="tablist">' + tabBtn('gist', 'The gist', true) + tabBtn('mood', 'Mood map', false) + tabBtn('ask', 'Ask this discussion', false) + '</div>' +
+      '<div class="w-pane" data-pane="gist">' + gistHtml(i) + '</div>' +
+      '<div class="w-pane" data-pane="mood" hidden>' + moodHtml(i) + '</div>' +
+      '<div class="w-pane" data-pane="ask" hidden>' + askHtml() + '</div>' +
+      '<div class="w-foot-row"><p class="muted small w-foot" id="wFoot"></p>' +
+      '<button type="button" class="icon-btn w-collapse" id="wCollapse" aria-expanded="true" aria-controls="whisperBody" aria-label="Collapse Crowd Whisperer" title="Collapse">' + UP + '</button></div>';
+    $('#whisperBody').html(h).prop('hidden', false);
+    updateFoot();
+    setCollapsed(false, true);
+  }
+
+  $(document).on('click', '.w-tab', function () {
+    var k = $(this).data('tab');
+    $('.w-tab').attr('aria-selected', 'false');
+    $(this).attr('aria-selected', 'true');
+    $('.w-pane').prop('hidden', true).filter('[data-pane="' + k + '"]').prop('hidden', false);
+  });
+
+  /* ---------- generate the summary ---------- */
+  function generate() {
+    var jobId = cur.jobId, refresh = !!cur.ins, $b = $('#whisperBtn');
+    $b.prop('disabled', true).find('.spinner').prop('hidden', false);
+    note('');
+    if (!cur.ins) {
+      $('#whisperBody').html('<div class="sk"></div><p class="muted small">Gemini is reading the posts. This usually takes 10 to 40 seconds.</p>').prop('hidden', false);
+    }
+    $.ajax({ url: 'api/ai_insights.php', method: 'POST', data: { job_id: jobId, refresh: refresh ? 1 : 0 }, dataType: 'json' })
+      .done(function (d) {
+        if (cur.jobId !== jobId) { return; }
+        cur.ins = d.insights;
+        showPanel();
+        setBtn('Re-read the room');
+        // learn which model wrote it, for the footer line
+        $.getJSON('api/ai_get.php', { job_id: jobId }).done(function (g) {
+          if (cur.jobId === jobId && g.model) { cur.model = g.model; updateFoot(); }
+        });
+      })
+      .fail(function (xhr) {
+        if (cur.jobId !== jobId) { return; }
+        note(errMsg(xhr, 'Something went wrong. Please try again.'));
+        if (!cur.ins) { $('#whisperBody').prop('hidden', true).empty(); }
+        else { showPanel(); }
+      })
+      .always(function () { $b.prop('disabled', false).find('.spinner').prop('hidden', true); });
+  }
+  $(document).on('click', '#whisperBtn', generate);
+
+  /* ---------- ask this discussion ---------- */
+  function answerHtml(d) {
+    var h = '<p class="w-answer' + (d.found ? '' : ' w-nf') + '">' + esc(plain(d.answer)) + '</p>';
+    if (d.cited && d.cited.length) {
+      h += '<ol class="w-src">' + d.cited.map(function (p) {
+        return '<li><b>[' + num(p.n) + ']</b> ' + esc(srcName(p)) + ': ' + esc(plain(p.text)) + postLink(p) + '</li>';
+      }).join('') + '</ol>';
+    }
+    return h;
+  }
+  function ask(q) {
+    if (!q) { return; }
+    var jobId = cur.jobId;
+    var $item = $('<div class="w-qa"><p class="w-q"></p><div class="w-a"><span class="spinner"></span> Reading the posts...</div></div>');
+    $item.find('.w-q').text(q);
+    $('#askLog').prepend($item);
+    $('#askQ').val('');
+    $('#askBtn').prop('disabled', true);
+    $.ajax({ url: 'api/ai_ask.php', method: 'POST', data: { job_id: jobId, question: q }, dataType: 'json' })
+      .done(function (d) { $item.find('.w-a').html(answerHtml(d)); })
+      .fail(function (xhr) { $item.find('.w-a').html('<span class="form-error">' + esc(errMsg(xhr, 'Could not get an answer.')) + '</span>'); })
+      .always(function () { $('#askBtn').prop('disabled', false); });
+  }
+  $(document).on('submit', '#askForm', function (e) { e.preventDefault(); ask($.trim($('#askQ').val())); });
+  $(document).on('click', '.wchip', function () { ask($(this).text()); });
+})(window.jQuery);
+EOF
+
+cat >> /var/www/html/css/whisper.css <<'EOF'
+
+/* footer row, collapse button, collapsed bar */
+.w-foot-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
+.w-foot-row .w-foot{margin:0}
+.w-collapse,#wExpand{flex:none}
+.whisper.is-collapsed{padding-top:14px;padding-bottom:14px}
+.whisper.is-collapsed .whisper-ico{width:36px;height:36px;border-radius:11px}
+.whisper.is-collapsed h3{margin-bottom:0}
+.whisper.is-collapsed .whisper-head>div{cursor:pointer}
+.w-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+EOF
+
+python3 - <<'PY'
+from pathlib import Path
+p = Path("/var/www/private/Gemini.php")
+t = p.read_text(encoding="utf-8")
+old = "mb_substr(preg_replace('/\\s+/', ' ', trim((string) $r['body'])), 0, 400)"
+new = "mb_substr(preg_replace('/\\s+/', ' ', trim(html_entity_decode((string) $r['body'], ENT_QUOTES | ENT_HTML5, 'UTF-8'))), 0, 400)"
+if new in t:
+    print("already fixed")
+elif old in t:
+    p.write_text(t.replace(old, new, 1), encoding="utf-8")
+    print("fixed")
+else:
+    print("not found - paste me this line: grep -n \"'text'\" /var/www/private/Gemini.php")
+PY
+
+php -l /var/www/private/Gemini.php
+sudo mysqldump --no-data --skip-comments opinionmap | grep -v '^/\*' > ~/schema.sql
+cat ~/schema.sql
+sudo mysql opinionmap -e "SELECT TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA='opinionmap' AND REFERENCED_TABLE_NAME IS NOT NULL;"
